@@ -1,134 +1,145 @@
 from __future__ import annotations
 
 import json
-import math
-import os
-from dataclasses import asdict, dataclass
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
-
-
-def _require_finite(name: str, value: float) -> float:
-    value = float(value)
-    if not math.isfinite(value):
-        raise ValueError(f"{name} must be finite")
-    return value
-
-
-def _require_positive(name: str, value: float) -> float:
-    value = _require_finite(name, value)
-    if value <= 0:
-        raise ValueError(f"{name} must be > 0")
-    return value
+from typing import Iterable, List, Optional
 
 
 @dataclass(frozen=True)
-class FXSnapshot:
-    as_of: str
-    base_currency: str
-    pair: str
-    eur_balance: float
-    usd_balance: float
-    eurusd_rate: float
-    previous_eurusd_rate: float | None
-    hedge_usd_notional: float
-    usd_exposure_gross: float
-    usd_exposure_open: float
+class CashFlow:
+    amount: float
+    currency: str
+
+
+@dataclass(frozen=True)
+class HedgePosition:
+    notional_usd: float
+
+
+@dataclass(frozen=True)
+class TrackerSnapshot:
+    eur_amount: float
+    usd_amount: float
+    spot_eur_usd: float
+    hedge_notional_usd: float
+    gross_usd_exposure: float
+    net_usd_exposure: float
     hedge_coverage_pct: float
-    fx_pnl_eur_rolling: float
-    fx_pnl_usd_rolling: float
-    auto_hedge_execution: bool
-    real_api_enabled: bool
+    fx_pnl_rolling: float
+
+    def to_dict(self) -> dict:
+        return {
+            "eur_amount": self.eur_amount,
+            "usd_amount": self.usd_amount,
+            "spot_eur_usd": self.spot_eur_usd,
+            "hedge_notional_usd": self.hedge_notional_usd,
+            "gross_usd_exposure": self.gross_usd_exposure,
+            "net_usd_exposure": self.net_usd_exposure,
+            "hedge_coverage_pct": self.hedge_coverage_pct,
+            "fx_pnl_rolling": self.fx_pnl_rolling,
+        }
 
 
-def calculate_rolling_fx_pnl(
-    open_usd_exposure: float,
-    previous_eurusd_rate: float | None,
-    current_eurusd_rate: float,
-) -> tuple[float, float]:
-    open_usd_exposure = _require_finite("open_usd_exposure", open_usd_exposure)
-    current_eurusd_rate = _require_positive("current_eurusd_rate", current_eurusd_rate)
-
-    if previous_eurusd_rate is None:
-        return 0.0, 0.0
-
-    previous_eurusd_rate = _require_positive("previous_eurusd_rate", previous_eurusd_rate)
-    pnl_eur = open_usd_exposure * ((1.0 / current_eurusd_rate) - (1.0 / previous_eurusd_rate))
-    pnl_usd = pnl_eur * current_eurusd_rate
-    return pnl_eur, pnl_usd
+def _round2(value: float) -> float:
+    return round(value, 2)
 
 
-def compute_fx_snapshot(
-    *,
-    eur_balance: float,
-    usd_balance: float,
-    eurusd_rate: float,
-    hedge_usd_notional: float = 0.0,
-    previous_eurusd_rate: float | None = None,
-    as_of: date | None = None,
-) -> FXSnapshot:
-    eur_balance = _require_finite("eur_balance", eur_balance)
-    usd_balance = _require_finite("usd_balance", usd_balance)
-    hedge_usd_notional = _require_finite("hedge_usd_notional", hedge_usd_notional)
-    eurusd_rate = _require_positive("eurusd_rate", eurusd_rate)
+def calculate_currency_hedge_tracker(
+    cashflows: Iterable[CashFlow],
+    spot_eur_usd: float,
+    hedge_positions: Optional[Iterable[HedgePosition]] = None,
+    previous_spot_eur_usd: Optional[float] = None,
+) -> TrackerSnapshot:
+    if spot_eur_usd <= 0:
+        raise ValueError("spot_eur_usd must be > 0")
+    if previous_spot_eur_usd is not None and previous_spot_eur_usd <= 0:
+        raise ValueError("previous_spot_eur_usd must be > 0")
 
-    if previous_eurusd_rate is not None:
-        previous_eurusd_rate = _require_positive("previous_eurusd_rate", previous_eurusd_rate)
+    eur_amount = 0.0
+    usd_amount = 0.0
 
-    gross_usd_exposure = abs(usd_balance)
-    open_usd_exposure = usd_balance - hedge_usd_notional
-    hedge_coverage_pct = 0.0 if gross_usd_exposure == 0 else (abs(hedge_usd_notional) / gross_usd_exposure) * 100.0
-    pnl_eur, pnl_usd = calculate_rolling_fx_pnl(open_usd_exposure, previous_eurusd_rate, eurusd_rate)
+    for flow in cashflows:
+        currency = flow.currency.upper()
+        if currency == "EUR":
+            eur_amount += flow.amount
+        elif currency == "USD":
+            usd_amount += flow.amount
+        else:
+            raise ValueError(f"unsupported currency: {flow.currency}")
 
-    return FXSnapshot(
-        as_of=(as_of or date.today()).isoformat(),
-        base_currency="EUR",
-        pair="EUR/USD",
-        eur_balance=eur_balance,
-        usd_balance=usd_balance,
-        eurusd_rate=eurusd_rate,
-        previous_eurusd_rate=previous_eurusd_rate,
-        hedge_usd_notional=hedge_usd_notional,
-        usd_exposure_gross=usd_balance,
-        usd_exposure_open=open_usd_exposure,
-        hedge_coverage_pct=hedge_coverage_pct,
-        fx_pnl_eur_rolling=pnl_eur,
-        fx_pnl_usd_rolling=pnl_usd,
-        auto_hedge_execution=False,
-        real_api_enabled=os.getenv("DF_149_REAL_API_ENABLED", "").lower() == "true",
+    hedge_notional_usd = sum(
+        position.notional_usd for position in (hedge_positions or [])
+    )
+
+    gross_usd_exposure = eur_amount * spot_eur_usd + usd_amount
+    net_usd_exposure = gross_usd_exposure - hedge_notional_usd
+
+    if gross_usd_exposure == 0:
+        hedge_coverage_pct = 0.0
+    else:
+        hedge_coverage_pct = max(
+            0.0, min(100.0, (hedge_notional_usd / gross_usd_exposure) * 100.0)
+        )
+
+    fx_pnl_rolling = 0.0
+    if previous_spot_eur_usd is not None:
+        fx_pnl_rolling = eur_amount * (spot_eur_usd - previous_spot_eur_usd)
+
+    return TrackerSnapshot(
+        eur_amount=_round2(eur_amount),
+        usd_amount=_round2(usd_amount),
+        spot_eur_usd=_round2(spot_eur_usd),
+        hedge_notional_usd=_round2(hedge_notional_usd),
+        gross_usd_exposure=_round2(gross_usd_exposure),
+        net_usd_exposure=_round2(net_usd_exposure),
+        hedge_coverage_pct=_round2(hedge_coverage_pct),
+        fx_pnl_rolling=_round2(fx_pnl_rolling),
     )
 
 
-def snapshot_to_report(snapshot: FXSnapshot) -> dict[str, Any]:
-    report = asdict(snapshot)
-    report["mission"] = "DF-149 KPM-Currency-Hedge-Tracker"
-    report["status"] = "monitor_only"
-    report["policy"] = "NIEMALS Auto-Hedge-Execution."
-    return report
-
-
-def write_report(snapshot: FXSnapshot, reports_dir: str | Path = "reports") -> Path:
-    report = snapshot_to_report(snapshot)
-    reports_path = Path(reports_dir)
-    reports_path.mkdir(parents=True, exist_ok=True)
-    output_path = reports_path / f"df-149-{snapshot.as_of}.json"
-    output_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
-    return output_path
-
-
-def main() -> Path:
-    snapshot = compute_fx_snapshot(
-        eur_balance=0.0,
-        usd_balance=0.0,
-        eurusd_rate=1.10,
-        hedge_usd_notional=0.0,
-        previous_eurusd_rate=None,
+def build_report(
+    cashflows: Iterable[CashFlow],
+    spot_eur_usd: float,
+    hedge_positions: Optional[Iterable[HedgePosition]] = None,
+    previous_spot_eur_usd: Optional[float] = None,
+    as_of: Optional[date] = None,
+) -> dict:
+    snapshot = calculate_currency_hedge_tracker(
+        cashflows=cashflows,
+        spot_eur_usd=spot_eur_usd,
+        hedge_positions=hedge_positions,
+        previous_spot_eur_usd=previous_spot_eur_usd,
     )
-    return write_report(snapshot)
+    report_date = (as_of or date.today()).isoformat()
+    return {
+        "mission": "DF-149 KPM-Currency-Hedge-Tracker",
+        "as_of": report_date,
+        "auto_hedge_execution": False,
+        "metrics": snapshot.to_dict(),
+    }
 
 
-if __name__ == "__main__":
-    path = main()
-    print(path)
+def write_report(
+    cashflows: Iterable[CashFlow],
+    spot_eur_usd: float,
+    hedge_positions: Optional[Iterable[HedgePosition]] = None,
+    previous_spot_eur_usd: Optional[float] = None,
+    reports_dir: str = "reports",
+    as_of: Optional[date] = None,
+) -> Path:
+    report = build_report(
+        cashflows=cashflows,
+        spot_eur_usd=spot_eur_usd,
+        hedge_positions=hedge_positions,
+        previous_spot_eur_usd=previous_spot_eur_usd,
+        as_of=as_of,
+    )
+    report_date = report["as_of"]
+    target_dir = Path(reports_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    target_path = target_dir / f"df-149-{report_date}.json"
+    target_path.write_text(json.dumps(report, indent=2, sort_keys=True), encoding="utf-8")
+    return target_path
 # [CRUX-MK]
