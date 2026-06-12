@@ -1,6 +1,6 @@
 {
   "df": "df-149",
-  "ts": "2026-06-11T22:21:35.745432+00:00",
+  "ts": "2026-06-12T02:53:18.839654+00:00",
   "crux": "[CRUX-MK]",
   "winner_provider": "incumbent-kept",
   "winner_tests_passed": true,
@@ -23,7 +23,7 @@
       "parse_ok": true,
       "tests_passed": false,
       "n_tests": 1,
-      "n_assert": 8,
+      "n_assert": 12,
       "coverage_pct": null,
       "q": 1.0,
       "error": null

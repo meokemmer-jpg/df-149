@@ -1,0 +1,16 @@
+{
+  "currency_pl_unrealized_eur": 0,
+  "df": "DF-149",
+  "eur_exposure_eur": 0,
+  "hedge_coverage_pct": 0,
+  "hedge_instruments": [],
+  "iso_timestamp": "2026-06-12T02:53:18.803132+00:00",
+  "k17_pre_action_verification": {
+    "env_tag": "mock",
+    "missing_anchors": [],
+    "ok": true
+  },
+  "source": "mock",
+  "usd_exposure_eur": 0,
+  "welle": "25"
+}
