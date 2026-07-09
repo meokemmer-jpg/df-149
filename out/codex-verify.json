@@ -1,0 +1,6 @@
+{
+  "verdict": "HOLDS",
+  "reason": "Der Test nutzt echte Ledger-Dateien mit normalem und adversarialem Input, ruft die produktiven Lade-, Berechnungs- und Reportfunktionen auf und erzwingt unterschiedliche PnL-, Hedge- und Risk-State-Ausgaben inklusive Fehlerfall.",
+  "ts": "2026-07-08T23:09:21.738825+00:00",
+  "attempts": 1
+}
